@@ -38,6 +38,12 @@ export default function FaceDetector() {
   const [initialZoomLevel] = useState(140); // Track if zoom has changed
   const [processedWithZoom, setProcessedWithZoom] = useState(140); // Track zoom level used for processing
 
+  // Preview states
+  const [gifPreviewUrl, setGifPreviewUrl] = useState<string>('');
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string>('');
+  const [gifBlob, setGifBlob] = useState<Blob | null>(null);
+  const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
+
   // Load face-api models on component mount
   useEffect(() => {
     const loadModels = async () => {
@@ -55,6 +61,18 @@ export default function FaceDetector() {
 
     loadModels();
   }, []);
+
+  // Cleanup preview URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (gifPreviewUrl) {
+        URL.revokeObjectURL(gifPreviewUrl);
+      }
+      if (videoPreviewUrl) {
+        URL.revokeObjectURL(videoPreviewUrl);
+      }
+    };
+  }, [gifPreviewUrl, videoPreviewUrl]);
 
   // Handle multiple file uploads
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -262,13 +280,10 @@ export default function FaceDetector() {
 
       // Listen to finish
       gif.on('finished', (blob) => {
-        // Download the GIF
+        // Store blob for preview
         const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `aligned-faces-${Date.now()}.gif`;
-        link.click();
-        URL.revokeObjectURL(url);
+        setGifPreviewUrl(url);
+        setGifBlob(blob);
 
         setIsGeneratingGif(false);
         setGifProgress(0);
@@ -329,15 +344,12 @@ export default function FaceDetector() {
         console.log('✅ Video recording stopped, creating blob...');
         const blob = new Blob(chunks, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `aligned-faces-${Date.now()}.webm`;
-        link.click();
-        URL.revokeObjectURL(url);
+        setVideoPreviewUrl(url);
+        setVideoBlob(blob);
 
         setIsGeneratingVideo(false);
         setVideoProgress(0);
-        console.log('✅ Video download started!');
+        console.log('✅ Video preview ready!');
       };
 
       // Start recording
@@ -396,6 +408,42 @@ export default function FaceDetector() {
     if (images.length > 0) {
       console.log(`⚠️ You have ${images.length} images. Click "Reprocess" to apply new zoom.`);
     }
+  };
+
+  // Download GIF
+  const downloadGif = () => {
+    if (!gifBlob) return;
+    const link = document.createElement('a');
+    link.href = gifPreviewUrl;
+    link.download = `aligned-faces-${Date.now()}.gif`;
+    link.click();
+  };
+
+  // Download Video
+  const downloadVideo = () => {
+    if (!videoBlob) return;
+    const link = document.createElement('a');
+    link.href = videoPreviewUrl;
+    link.download = `aligned-faces-${Date.now()}.webm`;
+    link.click();
+  };
+
+  // Clear GIF preview
+  const clearGifPreview = () => {
+    if (gifPreviewUrl) {
+      URL.revokeObjectURL(gifPreviewUrl);
+    }
+    setGifPreviewUrl('');
+    setGifBlob(null);
+  };
+
+  // Clear Video preview
+  const clearVideoPreview = () => {
+    if (videoPreviewUrl) {
+      URL.revokeObjectURL(videoPreviewUrl);
+    }
+    setVideoPreviewUrl('');
+    setVideoBlob(null);
   };
 
   const validImagesCount = images.filter(img => !img.hasError).length;
@@ -693,6 +741,79 @@ export default function FaceDetector() {
               <p className="text-sm text-center text-muted-foreground">
                 Recording Video... {videoProgress}%
               </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* GIF Preview */}
+      {gifPreviewUrl && (
+        <Card className="w-full max-w-2xl">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>GIF Preview</CardTitle>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={clearGifPreview}
+              >
+                ✕ Clear
+              </Button>
+            </div>
+            <CardDescription>Preview your animated GIF before downloading</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex justify-center bg-muted rounded-lg p-4">
+              <img
+                src={gifPreviewUrl}
+                alt="GIF Preview"
+                className="max-w-full h-auto rounded-lg shadow-lg"
+              />
+            </div>
+            <div className="flex gap-3 justify-center">
+              <Button
+                onClick={downloadGif}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                📥 Download GIF
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Video Preview */}
+      {videoPreviewUrl && (
+        <Card className="w-full max-w-2xl">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Video Preview</CardTitle>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={clearVideoPreview}
+              >
+                ✕ Clear
+              </Button>
+            </div>
+            <CardDescription>Preview your video before downloading</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex justify-center bg-muted rounded-lg p-4">
+              <video
+                src={videoPreviewUrl}
+                controls
+                loop
+                className="max-w-full h-auto rounded-lg shadow-lg"
+              />
+            </div>
+            <div className="flex gap-3 justify-center">
+              <Button
+                onClick={downloadVideo}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                📥 Download Video
+              </Button>
             </div>
           </CardContent>
         </Card>
