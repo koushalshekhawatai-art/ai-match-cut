@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { loadFaceApiModels, detectAllFaces } from '@/lib/faceapi';
+import type * as faceapi from 'face-api.js';
 
 export default function FaceDetection() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -69,7 +70,7 @@ export default function FaceDetection() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Draw detections
-      detections.forEach((detection) => {
+      detections.forEach((detection: faceapi.WithFaceLandmarks<faceapi.WithFaceExpressions<faceapi.WithFaceDetection<{}>>>) => {
         const box = detection.detection.box;
         ctx.strokeStyle = '#00ff00';
         ctx.lineWidth = 2;
@@ -79,7 +80,7 @@ export default function FaceDetection() {
         if (detection.landmarks) {
           const landmarks = detection.landmarks.positions;
           ctx.fillStyle = '#ff0000';
-          landmarks.forEach((point) => {
+          landmarks.forEach((point: faceapi.Point) => {
             ctx.beginPath();
             ctx.arc(point.x, point.y, 2, 0, 2 * Math.PI);
             ctx.fill();
