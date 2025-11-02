@@ -235,10 +235,11 @@ export default function FaceDetector() {
   };
 
   // Reprocess all images with new zoom level
-  const reprocessWithNewZoom = async () => {
+  const reprocessWithNewZoom = async (targetZoom?: number) => {
     if (images.length === 0) return;
 
-    console.log(`🔄 Reprocessing ${images.length} images with zoom level: ${zoomLevel}px`);
+    const useZoom = targetZoom ?? zoomLevel;
+    console.log(`🔄 Reprocessing ${images.length} images with zoom level: ${useZoom}px`);
 
     setIsLoading(true);
     setError('');
@@ -267,7 +268,7 @@ export default function FaceDetector() {
               const metrics = calculateEyeMetrics(detection.landmarks);
               const alignedCanvas = alignFaceOnCanvas(loadedImg, detection.landmarks, {
                 canvasSize: 500,
-                targetEyeDistance: zoomLevel,
+                targetEyeDistance: useZoom,
               });
 
               console.log(`✅ Image ${index + 1} reprocessed successfully`);
@@ -293,7 +294,7 @@ export default function FaceDetector() {
 
       console.log(`✅ Reprocessing complete! Updated ${updatedImages.length} images`);
       setImages(updatedImages);
-      setProcessedWithZoom(zoomLevel); // Update the processed zoom level
+      setProcessedWithZoom(useZoom); // Update the processed zoom level
     } catch (err) {
       console.error('❌ Error in reprocessWithNewZoom:', err);
       setError('Failed to reprocess images. Check console for details.');
@@ -461,11 +462,14 @@ export default function FaceDetector() {
   };
 
   // Handle zoom level change
-  const handleZoomChange = (newZoom: number) => {
+  const handleZoomChange = async (newZoom: number) => {
     console.log(`🔍 Zoom changed from ${zoomLevel}px to ${newZoom}px`);
     setZoomLevel(newZoom);
+
+    // Automatically reprocess images if any are loaded
     if (images.length > 0) {
-      console.log(`⚠️ You have ${images.length} images. Click "Reprocess" to apply new zoom.`);
+      console.log(`🔄 Auto-reprocessing ${images.length} images with new zoom level...`);
+      await reprocessWithNewZoom(newZoom);
     }
   };
 
@@ -636,6 +640,72 @@ export default function FaceDetector() {
               Lower values = more breathing space around face
             </p>
           </div>
+
+          {/* Uploaded Images Gallery */}
+          {images.length > 0 && (
+            <div className="space-y-3 pt-4 border-t">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Uploaded Images</h3>
+                <Badge variant="secondary">{images.length}</Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto">
+                {images.map((img, index) => (
+                  <Card key={img.id} className={`${img.hasError ? 'border-red-300' : 'border-green-300'} border-2`}>
+                    <CardContent className="p-2">
+                      <div className="relative">
+                        {/* Aligned Canvas */}
+                        <div className="rounded-lg overflow-hidden">
+                          {img.alignedCanvas ? (
+                            <canvas
+                              ref={(canvas) => {
+                                if (canvas && img.alignedCanvas) {
+                                  const ctx = canvas.getContext('2d');
+                                  if (ctx) {
+                                    canvas.width = img.alignedCanvas.width;
+                                    canvas.height = img.alignedCanvas.height;
+                                    ctx.drawImage(img.alignedCanvas, 0, 0);
+                                  }
+                                }
+                              }}
+                              className="w-full h-auto"
+                            />
+                          ) : (
+                            <div className="w-full aspect-square bg-muted flex items-center justify-center">
+                              <p className="text-destructive text-xs p-2 text-center">
+                                {img.errorMessage || 'Failed'}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Remove button */}
+                        <Button
+                          size="icon"
+                          variant="destructive"
+                          onClick={() => removeImage(img.id)}
+                          className="absolute top-1 right-1 h-6 w-6 rounded-full text-xs"
+                        >
+                          ×
+                        </Button>
+
+                        {/* Frame number badge */}
+                        <Badge className="absolute top-1 left-1 text-xs px-1 py-0">
+                          #{index + 1}
+                        </Badge>
+                      </div>
+
+                      {/* Metadata */}
+                      {!img.hasError && (
+                        <div className="text-xs text-muted-foreground text-center mt-1">
+                          {img.angle.toFixed(1)}°
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -700,8 +770,68 @@ export default function FaceDetector() {
                 )}
 
                 {!isGeneratingGif && !isGeneratingVideo && (
-                  <div className="text-xs text-center text-muted-foreground">
-                    Animation playing at {frameDuration}ms per frame
+                  <div className="space-y-4 pt-4 border-t">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold">Frame Duration</h4>
+                      <Badge variant="secondary" className="font-mono text-xs">
+                        {frameDuration}ms ({(1000 / frameDuration).toFixed(1)} FPS)
+                      </Badge>
+                    </div>
+
+                    {/* Slider */}
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground w-12">Fast</span>
+                      <Slider
+                        value={[frameDuration]}
+                        onValueChange={(value) => setFrameDuration(value[0])}
+                        min={100}
+                        max={2000}
+                        step={100}
+                        disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                        className="flex-1"
+                      />
+                      <span className="text-xs text-muted-foreground w-12 text-right">Slow</span>
+                    </div>
+
+                    {/* Preset Buttons */}
+                    <div className="flex gap-2 flex-wrap justify-center">
+                      <Button
+                        size="sm"
+                        variant={frameDuration === 200 ? "default" : "outline"}
+                        onClick={() => setFrameDuration(200)}
+                        disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                      >
+                        Very Fast
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={frameDuration === 333 ? "default" : "outline"}
+                        onClick={() => setFrameDuration(333)}
+                        disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                      >
+                        Fast
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={frameDuration === 500 ? "default" : "outline"}
+                        onClick={() => setFrameDuration(500)}
+                        disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                      >
+                        Default
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={frameDuration === 1000 ? "default" : "outline"}
+                        onClick={() => setFrameDuration(1000)}
+                        disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                      >
+                        Slow
+                      </Button>
+                    </div>
+
+                    <p className="text-xs text-center text-muted-foreground">
+                      Control animation speed for GIF and Video
+                    </p>
                   </div>
                 )}
               </div>
@@ -764,73 +894,6 @@ export default function FaceDetector() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Frame Duration Control */}
-      {!isModelsLoading && (
-        <Card className="w-full max-w-2xl">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Frame Duration</CardTitle>
-              <Badge variant="secondary" className="font-mono">
-                {frameDuration}ms ({(1000 / frameDuration).toFixed(1)} FPS)
-              </Badge>
-            </div>
-            <CardDescription>Control animation speed for GIF and Video</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Slider */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground w-12">Fast</span>
-              <Slider
-                value={[frameDuration]}
-                onValueChange={(value) => setFrameDuration(value[0])}
-                min={100}
-                max={2000}
-                step={100}
-                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
-                className="flex-1"
-              />
-              <span className="text-xs text-muted-foreground w-12 text-right">Slow</span>
-            </div>
-
-            {/* Preset Buttons */}
-            <div className="flex gap-2 flex-wrap justify-center">
-              <Button
-                size="sm"
-                variant={frameDuration === 200 ? "default" : "outline"}
-                onClick={() => setFrameDuration(200)}
-                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
-              >
-                Very Fast
-              </Button>
-              <Button
-                size="sm"
-                variant={frameDuration === 333 ? "default" : "outline"}
-                onClick={() => setFrameDuration(333)}
-                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
-              >
-                Fast
-              </Button>
-              <Button
-                size="sm"
-                variant={frameDuration === 500 ? "default" : "outline"}
-                onClick={() => setFrameDuration(500)}
-                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
-              >
-                Default
-              </Button>
-              <Button
-                size="sm"
-                variant={frameDuration === 1000 ? "default" : "outline"}
-                onClick={() => setFrameDuration(1000)}
-                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
-              >
-                Slow
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Zoom Change Warning */}
       {images.length > 0 && zoomLevel !== processedWithZoom && (
@@ -903,71 +966,6 @@ export default function FaceDetector() {
             <AlertDescription>Processing images...</AlertDescription>
           </div>
         </Alert>
-      )}
-
-      {/* Images Gallery */}
-      {images.length > 0 && (
-        <div className="w-full space-y-4">
-          <h2 className="text-2xl font-semibold text-center">
-            Processed Images <Badge variant="secondary">{images.length}</Badge>
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {images.map((img, index) => (
-              <Card key={img.id} className={img.hasError ? 'border-red-300' : 'border-green-300'}>
-                <CardContent className="p-4">
-                  <div className="relative">
-                    {/* Aligned Canvas */}
-                    <div className="rounded-lg overflow-hidden">
-                      {img.alignedCanvas ? (
-                        <canvas
-                          ref={(canvas) => {
-                            if (canvas && img.alignedCanvas) {
-                              const ctx = canvas.getContext('2d');
-                              if (ctx) {
-                                canvas.width = img.alignedCanvas.width;
-                                canvas.height = img.alignedCanvas.height;
-                                ctx.drawImage(img.alignedCanvas, 0, 0);
-                              }
-                            }
-                          }}
-                          className="w-full h-auto"
-                        />
-                      ) : (
-                        <div className="w-full aspect-square bg-muted flex items-center justify-center">
-                          <p className="text-destructive text-sm p-4 text-center">
-                            {img.errorMessage || 'Failed to process'}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Remove button */}
-                    <Button
-                      size="icon"
-                      variant="destructive"
-                      onClick={() => removeImage(img.id)}
-                      className="absolute top-2 right-2 h-8 w-8 rounded-full"
-                    >
-                      ×
-                    </Button>
-
-                    {/* Frame number badge */}
-                    <Badge className="absolute top-2 left-2">
-                      #{index + 1}
-                    </Badge>
-                  </div>
-
-                  {/* Metadata */}
-                  {!img.hasError && (
-                    <div className="text-xs text-muted-foreground text-center mt-2">
-                      Angle: {img.angle.toFixed(2)}°
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Instructions */}
