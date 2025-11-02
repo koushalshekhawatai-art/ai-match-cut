@@ -23,6 +23,8 @@ interface ProcessedImage {
 
 export default function FaceDetector() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number | undefined>(undefined);
 
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -43,6 +45,7 @@ export default function FaceDetector() {
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string>('');
   const [gifBlob, setGifBlob] = useState<Blob | null>(null);
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
+  const [currentPreviewFrame, setCurrentPreviewFrame] = useState(0);
 
   // Load face-api models on component mount
   useEffect(() => {
@@ -71,8 +74,64 @@ export default function FaceDetector() {
       if (videoPreviewUrl) {
         URL.revokeObjectURL(videoPreviewUrl);
       }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
     };
   }, [gifPreviewUrl, videoPreviewUrl]);
+
+  // Animate preview canvas when images are loaded
+  useEffect(() => {
+    const validImages = images.filter(img => img.alignedCanvas && !img.hasError);
+
+    if (validImages.length === 0) {
+      setCurrentPreviewFrame(0);
+      return;
+    }
+
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Set canvas size
+    canvas.width = 500;
+    canvas.height = 500;
+
+    let lastFrameTime = Date.now();
+    let frameIndex = 0;
+
+    const animate = () => {
+      const now = Date.now();
+      const elapsed = now - lastFrameTime;
+
+      if (elapsed >= frameDuration) {
+        // Draw current frame
+        const currentImage = validImages[frameIndex];
+        if (currentImage.alignedCanvas) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(currentImage.alignedCanvas, 0, 0);
+        }
+
+        setCurrentPreviewFrame(frameIndex + 1);
+        frameIndex = (frameIndex + 1) % validImages.length;
+        lastFrameTime = now;
+      }
+
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animate();
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [images, frameDuration]);
 
   // Handle multiple file uploads
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -457,8 +516,10 @@ export default function FaceDetector() {
         <p className="text-muted-foreground">Transform faces into perfectly aligned animated GIFs & Videos</p>
       </div>
 
-      {/* Upload Controls */}
-      <Card className="w-full max-w-2xl">
+      {/* Main Layout: Upload on Left, Preview on Right */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
+        {/* Left Column - Upload Controls */}
+        <Card className="w-full">
         <CardHeader className="text-center">
           <CardTitle>Upload Images</CardTitle>
           <CardDescription>Select multiple images with faces to create your animation</CardDescription>
@@ -577,6 +638,132 @@ export default function FaceDetector() {
           </div>
         </CardContent>
       </Card>
+
+        {/* Right Column - Preview Section */}
+        <Card className="w-full">
+          <CardHeader>
+            <CardTitle>Preview</CardTitle>
+            <CardDescription>
+              {validImagesCount > 0 && !gifPreviewUrl && !videoPreviewUrl
+                ? `Live preview - ${validImagesCount} frames`
+                : 'Your generated GIF or Video will appear here'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {validImagesCount === 0 && !gifPreviewUrl && !videoPreviewUrl ? (
+              // Empty state - no images loaded
+              <div className="flex flex-col items-center justify-center py-12 bg-muted rounded-lg">
+                <div className="w-20 h-20 rounded-full bg-background flex items-center justify-center mb-4">
+                  <svg className="w-10 h-10 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-medium text-muted-foreground mb-2">No frames to preview</h3>
+                <p className="text-sm text-muted-foreground text-center">
+                  Upload and align images to see preview
+                </p>
+              </div>
+            ) : !gifPreviewUrl && !videoPreviewUrl && validImagesCount > 0 ? (
+              // Live canvas preview
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <Badge variant="outline">Live Preview</Badge>
+                  <span className="text-xs text-muted-foreground">
+                    Frame {currentPreviewFrame} / {validImagesCount}
+                  </span>
+                </div>
+                <div className="flex justify-center bg-muted rounded-lg p-4">
+                  <canvas
+                    ref={previewCanvasRef}
+                    className="max-w-full h-auto rounded-lg shadow-lg"
+                  />
+                </div>
+
+                {/* Show progress bars when generating */}
+                {isGeneratingGif && (
+                  <div className="space-y-2">
+                    <Progress value={gifProgress} className="h-2" />
+                    <p className="text-sm text-center text-muted-foreground">
+                      Generating GIF... {gifProgress}%
+                    </p>
+                  </div>
+                )}
+
+                {isGeneratingVideo && (
+                  <div className="space-y-2">
+                    <Progress value={videoProgress} className="h-2" />
+                    <p className="text-sm text-center text-muted-foreground">
+                      Recording Video... {videoProgress}%
+                    </p>
+                  </div>
+                )}
+
+                {!isGeneratingGif && !isGeneratingVideo && (
+                  <div className="text-xs text-center text-muted-foreground">
+                    Animation playing at {frameDuration}ms per frame
+                  </div>
+                )}
+              </div>
+            ) : gifPreviewUrl ? (
+              // GIF Preview
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <Badge>GIF</Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={clearGifPreview}
+                  >
+                    ✕ Clear
+                  </Button>
+                </div>
+                <div className="flex justify-center bg-muted rounded-lg p-4">
+                  <img
+                    src={gifPreviewUrl}
+                    alt="GIF Preview"
+                    className="max-w-full h-auto rounded-lg shadow-lg"
+                  />
+                </div>
+                <Button
+                  onClick={downloadGif}
+                  className="w-full bg-green-600 hover:bg-green-700"
+                >
+                  📥 Download GIF
+                </Button>
+              </div>
+            ) : (
+              // Video Preview
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <Badge>Video</Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={clearVideoPreview}
+                  >
+                    ✕ Clear
+                  </Button>
+                </div>
+                <div className="flex justify-center bg-muted rounded-lg p-4">
+                  <video
+                    src={videoPreviewUrl}
+                    controls
+                    loop
+                    className="max-w-full h-auto rounded-lg shadow-lg"
+                  />
+                </div>
+                <Button
+                  onClick={downloadVideo}
+                  className="w-full bg-blue-600 hover:bg-blue-700"
+                >
+                  📥 Download Video
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Frame Duration Control */}
       {!isModelsLoading && (
@@ -716,107 +903,6 @@ export default function FaceDetector() {
             <AlertDescription>Processing images...</AlertDescription>
           </div>
         </Alert>
-      )}
-
-      {/* GIF Generation Progress */}
-      {isGeneratingGif && (
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6">
-            <div className="space-y-2">
-              <Progress value={gifProgress} className="h-2" />
-              <p className="text-sm text-center text-muted-foreground">
-                Generating GIF... {gifProgress}%
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Video Generation Progress */}
-      {isGeneratingVideo && (
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6">
-            <div className="space-y-2">
-              <Progress value={videoProgress} className="h-2" />
-              <p className="text-sm text-center text-muted-foreground">
-                Recording Video... {videoProgress}%
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* GIF Preview */}
-      {gifPreviewUrl && (
-        <Card className="w-full max-w-2xl">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>GIF Preview</CardTitle>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={clearGifPreview}
-              >
-                ✕ Clear
-              </Button>
-            </div>
-            <CardDescription>Preview your animated GIF before downloading</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex justify-center bg-muted rounded-lg p-4">
-              <img
-                src={gifPreviewUrl}
-                alt="GIF Preview"
-                className="max-w-full h-auto rounded-lg shadow-lg"
-              />
-            </div>
-            <div className="flex gap-3 justify-center">
-              <Button
-                onClick={downloadGif}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                📥 Download GIF
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Video Preview */}
-      {videoPreviewUrl && (
-        <Card className="w-full max-w-2xl">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Video Preview</CardTitle>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={clearVideoPreview}
-              >
-                ✕ Clear
-              </Button>
-            </div>
-            <CardDescription>Preview your video before downloading</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex justify-center bg-muted rounded-lg p-4">
-              <video
-                src={videoPreviewUrl}
-                controls
-                loop
-                className="max-w-full h-auto rounded-lg shadow-lg"
-              />
-            </div>
-            <div className="flex gap-3 justify-center">
-              <Button
-                onClick={downloadVideo}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                📥 Download Video
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
       )}
 
       {/* Images Gallery */}
