@@ -47,6 +47,10 @@ export default function FaceDetector() {
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [currentPreviewFrame, setCurrentPreviewFrame] = useState(0);
 
+  // Export settings
+  const [exportFormat, setExportFormat] = useState<'gif' | 'video'>('gif');
+  const [exportResolution, setExportResolution] = useState(500); // Default 500x500
+
   // Load face-api models on component mount
   useEffect(() => {
     const loadModels = async () => {
@@ -304,7 +308,7 @@ export default function FaceDetector() {
   };
 
   // Generate GIF from aligned canvases
-  const generateGif = async () => {
+  const generateGif = async (resolution: number = exportResolution) => {
     const validImages = images.filter(img => img.alignedCanvas && !img.hasError);
 
     if (validImages.length === 0) {
@@ -317,19 +321,34 @@ export default function FaceDetector() {
     setError('');
 
     try {
+      // Create a temporary canvas for resizing if needed
+      const needsResize = resolution !== 500;
+
       // Create GIF instance
       const gif = new GIF({
         workers: 2,
         quality: 10,
-        width: 500,
-        height: 500,
+        width: resolution,
+        height: resolution,
         workerScript: '/gif.worker.js', // We'll need to copy this
       });
 
       // Add frames with user-specified duration
       validImages.forEach((img) => {
         if (img.alignedCanvas) {
-          gif.addFrame(img.alignedCanvas, { delay: frameDuration });
+          if (needsResize) {
+            // Resize canvas to target resolution
+            const resizedCanvas = document.createElement('canvas');
+            resizedCanvas.width = resolution;
+            resizedCanvas.height = resolution;
+            const ctx = resizedCanvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img.alignedCanvas, 0, 0, resolution, resolution);
+              gif.addFrame(resizedCanvas, { delay: frameDuration });
+            }
+          } else {
+            gif.addFrame(img.alignedCanvas, { delay: frameDuration });
+          }
         }
       });
 
@@ -360,7 +379,7 @@ export default function FaceDetector() {
   };
 
   // Generate Video (MP4/WebM) from aligned canvases
-  const generateVideo = async () => {
+  const generateVideo = async (resolution: number = exportResolution) => {
     const validImages = images.filter(img => img.alignedCanvas && !img.hasError);
 
     if (validImages.length === 0) {
@@ -373,12 +392,12 @@ export default function FaceDetector() {
     setError('');
 
     try {
-      console.log(`🎬 Starting video generation with ${validImages.length} frames`);
+      console.log(`🎬 Starting video generation with ${validImages.length} frames at ${resolution}x${resolution}`);
 
       // Create a temporary canvas for video rendering
       const videoCanvas = document.createElement('canvas');
-      videoCanvas.width = 500;
-      videoCanvas.height = 500;
+      videoCanvas.width = resolution;
+      videoCanvas.height = resolution;
       const ctx = videoCanvas.getContext('2d');
 
       if (!ctx) {
@@ -430,10 +449,10 @@ export default function FaceDetector() {
 
         const img = validImages[currentFrame];
         if (img.alignedCanvas && ctx) {
-          ctx.clearRect(0, 0, 500, 500);
+          ctx.clearRect(0, 0, resolution, resolution);
           ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, 500, 500);
-          ctx.drawImage(img.alignedCanvas, 0, 0);
+          ctx.fillRect(0, 0, resolution, resolution);
+          ctx.drawImage(img.alignedCanvas, 0, 0, resolution, resolution);
         }
 
         const progress = ((currentFrame + 1) / totalFrames) * 100;
@@ -470,6 +489,15 @@ export default function FaceDetector() {
     if (images.length > 0) {
       console.log(`🔄 Auto-reprocessing ${images.length} images with new zoom level...`);
       await reprocessWithNewZoom(newZoom);
+    }
+  };
+
+  // Unified generate function based on export settings
+  const handleGenerate = async () => {
+    if (exportFormat === 'gif') {
+      await generateGif(exportResolution);
+    } else {
+      await generateVideo(exportResolution);
     }
   };
 
@@ -709,7 +737,8 @@ export default function FaceDetector() {
         </CardContent>
       </Card>
 
-        {/* Right Column - Preview Section */}
+        {/* Right Column - Preview and Export */}
+        <div className="space-y-6">
         <Card className="w-full">
           <CardHeader>
             <CardTitle>Preview</CardTitle>
@@ -893,6 +922,142 @@ export default function FaceDetector() {
             )}
           </CardContent>
         </Card>
+
+        {/* Export Section */}
+        <Card className="w-full">
+          <CardHeader>
+            <CardTitle>Export Settings</CardTitle>
+            <CardDescription>
+              Choose your output format and resolution
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Format Selection */}
+            <div className="space-y-3">
+              <Label className="text-sm font-semibold">Output Format</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <Button
+                  variant={exportFormat === 'gif' ? 'default' : 'outline'}
+                  onClick={() => setExportFormat('gif')}
+                  disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  className="h-auto py-4 flex flex-col gap-2"
+                >
+                  <span className="text-2xl">📸</span>
+                  <span className="font-semibold">GIF</span>
+                  <span className="text-xs text-muted-foreground">
+                    Universal compatibility
+                  </span>
+                </Button>
+                <Button
+                  variant={exportFormat === 'video' ? 'default' : 'outline'}
+                  onClick={() => setExportFormat('video')}
+                  disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  className="h-auto py-4 flex flex-col gap-2"
+                >
+                  <span className="text-2xl">🎥</span>
+                  <span className="font-semibold">Video</span>
+                  <span className="text-xs text-muted-foreground">
+                    Smaller file size (WebM)
+                  </span>
+                </Button>
+              </div>
+            </div>
+
+            {/* Resolution Selection */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-semibold">Resolution</Label>
+                <Badge variant="secondary" className="font-mono">
+                  {exportResolution}x{exportResolution}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <Button
+                  size="sm"
+                  variant={exportResolution === 500 ? 'default' : 'outline'}
+                  onClick={() => setExportResolution(500)}
+                  disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                >
+                  500px
+                </Button>
+                <Button
+                  size="sm"
+                  variant={exportResolution === 720 ? 'default' : 'outline'}
+                  onClick={() => setExportResolution(720)}
+                  disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                >
+                  720px (HD)
+                </Button>
+                <Button
+                  size="sm"
+                  variant={exportResolution === 1080 ? 'default' : 'outline'}
+                  onClick={() => setExportResolution(1080)}
+                  disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                >
+                  1080px (FHD)
+                </Button>
+                <Button
+                  size="sm"
+                  variant={exportResolution === 1440 ? 'default' : 'outline'}
+                  onClick={() => setExportResolution(1440)}
+                  disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                >
+                  1440px (2K)
+                </Button>
+              </div>
+            </div>
+
+            {/* Current Settings Summary */}
+            <div className="p-4 bg-muted rounded-lg space-y-2">
+              <h4 className="text-sm font-semibold">Current Settings</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Frames:</span>
+                  <span className="font-medium">{validImagesCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Frame Duration:</span>
+                  <span className="font-medium">{frameDuration}ms</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Face Zoom:</span>
+                  <span className="font-medium">{zoomLevel}px</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">FPS:</span>
+                  <span className="font-medium">{(1000 / frameDuration).toFixed(1)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Generate Button */}
+            <Button
+              onClick={handleGenerate}
+              disabled={validImagesCount === 0 || isGeneratingGif || isGeneratingVideo}
+              className="w-full h-12 text-lg"
+              variant="default"
+            >
+              {isGeneratingGif ? (
+                <>🎨 Generating GIF... {gifProgress}%</>
+              ) : isGeneratingVideo ? (
+                <>🎬 Recording Video... {videoProgress}%</>
+              ) : (
+                <>
+                  {exportFormat === 'gif' ? '📸 Generate GIF' : '🎥 Generate Video'} ({validImagesCount} frames)
+                </>
+              )}
+            </Button>
+
+            {/* Progress Bar */}
+            {(isGeneratingGif || isGeneratingVideo) && (
+              <Progress
+                value={isGeneratingGif ? gifProgress : videoProgress}
+                className="w-full"
+              />
+            )}
+          </CardContent>
+        </Card>
+        </div>
       </div>
 
       {/* Zoom Change Warning */}
@@ -912,28 +1077,12 @@ export default function FaceDetector() {
       {images.length > 0 && (
         <div className="flex flex-wrap gap-3 justify-center w-full max-w-2xl">
           <Button
-            onClick={reprocessWithNewZoom}
+            onClick={() => reprocessWithNewZoom()}
             disabled={isLoading || isGeneratingGif || isGeneratingVideo}
             variant={zoomLevel !== processedWithZoom ? "destructive" : "secondary"}
             className={zoomLevel !== processedWithZoom ? "animate-pulse" : ""}
           >
             🔄 {zoomLevel !== processedWithZoom ? 'Reprocess with New Zoom!' : 'Reprocess Images'}
-          </Button>
-          <Button
-            onClick={generateGif}
-            disabled={validImagesCount === 0 || isGeneratingGif || isGeneratingVideo}
-            variant="default"
-            className="bg-green-600 hover:bg-green-700"
-          >
-            {isGeneratingGif ? `Generating... ${gifProgress}%` : `📸 Generate GIF (${validImagesCount})`}
-          </Button>
-          <Button
-            onClick={generateVideo}
-            disabled={validImagesCount === 0 || isGeneratingGif || isGeneratingVideo}
-            variant="default"
-            className="bg-blue-600 hover:bg-blue-700"
-          >
-            {isGeneratingVideo ? `Recording... ${videoProgress}%` : `🎥 Generate Video (${validImagesCount})`}
           </Button>
           <Button
             onClick={clearAll}
@@ -966,34 +1115,6 @@ export default function FaceDetector() {
             <AlertDescription>Processing images...</AlertDescription>
           </div>
         </Alert>
-      )}
-
-      {/* Instructions */}
-      {images.length === 0 && !isModelsLoading && (
-        <Card className="w-full max-w-2xl">
-          <CardHeader>
-            <CardTitle className="text-center">How It Works</CardTitle>
-            <CardDescription className="text-center">
-              Create stunning face animations in just a few steps
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ol className="text-sm space-y-2 list-decimal list-inside text-muted-foreground">
-              <li>Adjust <strong>zoom level</strong> and <strong>frame duration</strong> to your preference</li>
-              <li>Upload multiple images with <strong>clear, visible faces</strong></li>
-              <li>Each face will be automatically <strong>aligned</strong> (horizontal eyes, centered)</li>
-              <li>Use "Reprocess" button if you want to change zoom after upload</li>
-              <li>Click <strong>📸 Generate GIF</strong> for animated GIF (universal compatibility)</li>
-              <li>Or click <strong>🎥 Generate Video</strong> for WebM video (smaller file size)</li>
-              <li>Your file will download automatically!</li>
-            </ol>
-            <div className="mt-6 p-4 bg-muted rounded-lg">
-              <p className="text-sm text-center text-muted-foreground">
-                ✨ Perfect for creating match-cut sequences, face morphing animations, and more!
-              </p>
-            </div>
-          </CardContent>
-        </Card>
       )}
     </div>
   );
