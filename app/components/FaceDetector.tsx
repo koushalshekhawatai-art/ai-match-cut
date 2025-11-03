@@ -50,6 +50,7 @@ export default function FaceDetector() {
   // Export settings
   const [exportFormat, setExportFormat] = useState<'gif' | 'video'>('gif');
   const [exportResolution, setExportResolution] = useState(500); // Default 500x500
+  const [videoFileExtension, setVideoFileExtension] = useState('webm'); // Track actual video format
 
   // Load face-api models on component mount
   useEffect(() => {
@@ -404,11 +405,40 @@ export default function FaceDetector() {
         throw new Error('Could not get canvas context');
       }
 
-      // Setup MediaRecorder
-      const stream = videoCanvas.captureStream(30); // 30 FPS
+      // Setup MediaRecorder with high quality settings
+      const stream = videoCanvas.captureStream(60); // 60 FPS for smoother playback
+
+      // Calculate bitrate based on resolution (higher res = higher bitrate)
+      // Base: 500px = 15 Mbps, scale up for larger resolutions
+      const bitrate = Math.max(15000000, (resolution / 500) * (resolution / 500) * 15000000);
+      console.log(`📊 Using bitrate: ${(bitrate / 1000000).toFixed(1)} Mbps`);
+
+      // Try to use H.264/MP4 first (better compatibility), fallback to VP9/WebM
+      let mimeType = 'video/webm;codecs=vp9';
+      let fileExtension = 'webm';
+
+      if (MediaRecorder.isTypeSupported('video/mp4')) {
+        mimeType = 'video/mp4';
+        fileExtension = 'mp4';
+        console.log('✅ Using MP4 format');
+      } else if (MediaRecorder.isTypeSupported('video/webm;codecs=h264')) {
+        mimeType = 'video/webm;codecs=h264';
+        fileExtension = 'webm';
+        console.log('✅ Using H.264 codec in WebM container');
+      } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+        mimeType = 'video/webm;codecs=vp9';
+        fileExtension = 'webm';
+        console.log('✅ Using VP9 codec (fallback)');
+      } else {
+        // Last resort - no codec specified
+        mimeType = 'video/webm';
+        fileExtension = 'webm';
+        console.log('⚠️ Using default WebM format');
+      }
+
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'video/webm;codecs=vp9', // VP9 for better quality
-        videoBitsPerSecond: 5000000, // 5 Mbps
+        mimeType,
+        videoBitsPerSecond: bitrate,
       });
 
       const chunks: Blob[] = [];
@@ -421,14 +451,15 @@ export default function FaceDetector() {
 
       mediaRecorder.onstop = () => {
         console.log('✅ Video recording stopped, creating blob...');
-        const blob = new Blob(chunks, { type: 'video/webm' });
+        const blob = new Blob(chunks, { type: mimeType });
         const url = URL.createObjectURL(blob);
         setVideoPreviewUrl(url);
         setVideoBlob(blob);
+        setVideoFileExtension(fileExtension); // Store the actual format used
 
         setIsGeneratingVideo(false);
         setVideoProgress(0);
-        console.log('✅ Video preview ready!');
+        console.log(`✅ Video preview ready! Format: ${fileExtension}, Size: ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
       };
 
       // Start recording
@@ -515,7 +546,7 @@ export default function FaceDetector() {
     if (!videoBlob) return;
     const link = document.createElement('a');
     link.href = videoPreviewUrl;
-    link.download = `aligned-faces-${Date.now()}.webm`;
+    link.download = `aligned-faces-${Date.now()}.${videoFileExtension}`;
     link.click();
   };
 
@@ -957,7 +988,7 @@ export default function FaceDetector() {
                   <span className="text-2xl">🎥</span>
                   <span className="font-semibold">Video</span>
                   <span className="text-xs text-muted-foreground">
-                    Smaller file size (WebM)
+                    High quality MP4/WebM
                   </span>
                 </Button>
               </div>
