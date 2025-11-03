@@ -50,6 +50,7 @@ export default function FaceDetector() {
   // Export settings
   const [exportFormat, setExportFormat] = useState<'gif' | 'video'>('gif');
   const [exportResolution, setExportResolution] = useState(500); // Default 500x500
+  const [videoFps, setVideoFps] = useState(30); // Default 30 FPS for video
   const [videoFileExtension, setVideoFileExtension] = useState('webm'); // Track actual video format
 
   // Load face-api models on component mount
@@ -367,6 +368,13 @@ export default function FaceDetector() {
 
         setIsGeneratingGif(false);
         setGifProgress(0);
+
+        // Auto-download the GIF
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `aligned-faces-${Date.now()}.gif`;
+        link.click();
+        console.log('✅ GIF download started automatically');
       });
 
       // Render the GIF
@@ -380,7 +388,7 @@ export default function FaceDetector() {
   };
 
   // Generate Video (MP4/WebM) from aligned canvases
-  const generateVideo = async (resolution: number = exportResolution) => {
+  const generateVideo = async (resolution: number = exportResolution, fps: number = videoFps) => {
     const validImages = images.filter(img => img.alignedCanvas && !img.hasError);
 
     if (validImages.length === 0) {
@@ -393,7 +401,7 @@ export default function FaceDetector() {
     setError('');
 
     try {
-      console.log(`🎬 Starting video generation with ${validImages.length} frames at ${resolution}x${resolution}`);
+      console.log(`🎬 Starting video generation with ${validImages.length} frames at ${resolution}x${resolution} @ ${fps} FPS`);
 
       // Create a temporary canvas for video rendering
       const videoCanvas = document.createElement('canvas');
@@ -406,7 +414,7 @@ export default function FaceDetector() {
       }
 
       // Setup MediaRecorder with high quality settings
-      const stream = videoCanvas.captureStream(60); // 60 FPS for smoother playback
+      const stream = videoCanvas.captureStream(fps); // User-selected FPS
 
       // Calculate bitrate based on resolution (higher res = higher bitrate)
       // Base: 500px = 15 Mbps, scale up for larger resolutions
@@ -460,6 +468,13 @@ export default function FaceDetector() {
         setIsGeneratingVideo(false);
         setVideoProgress(0);
         console.log(`✅ Video preview ready! Format: ${fileExtension}, Size: ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
+
+        // Auto-download the video
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `aligned-faces-${Date.now()}.${fileExtension}`;
+        link.click();
+        console.log('✅ Video download started automatically');
       };
 
       // Start recording
@@ -528,7 +543,7 @@ export default function FaceDetector() {
     if (exportFormat === 'gif') {
       await generateGif(exportResolution);
     } else {
-      await generateVideo(exportResolution);
+      await generateVideo(exportResolution, videoFps);
     }
   };
 
@@ -573,7 +588,7 @@ export default function FaceDetector() {
   return (
     <div className="flex flex-col items-center gap-6 p-8 max-w-7xl mx-auto">
       <div className="text-center space-y-2">
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+        <h1 className="text-4xl font-bold text-foreground">
           AI Match Cut Generator
         </h1>
         <p className="text-muted-foreground">Transform faces into perfectly aligned animated GIFs & Videos</p>
@@ -582,12 +597,12 @@ export default function FaceDetector() {
       {/* Main Layout: Upload on Left, Preview on Right */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
         {/* Left Column - Upload Controls */}
-        <Card className="w-full">
+        <Card className="w-full h-full flex flex-col">
         <CardHeader className="text-center">
           <CardTitle>Upload Images</CardTitle>
           <CardDescription>Select multiple images with faces to create your animation</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col items-center gap-4">
+        <CardContent className="flex flex-col items-center gap-4 flex-1 overflow-hidden">
           <input
             ref={fileInputRef}
             type="file"
@@ -602,7 +617,7 @@ export default function FaceDetector() {
             size="lg"
             className="w-full max-w-xs"
           >
-            {isModelsLoading ? 'Loading models...' : isLoading ? 'Processing...' : '📤 Upload Images'}
+            {isModelsLoading ? 'Loading models...' : isLoading ? 'Processing...' : 'Upload Images'}
           </Button>
 
           {/* Detector Model Selection */}
@@ -702,12 +717,12 @@ export default function FaceDetector() {
 
           {/* Uploaded Images Gallery */}
           {images.length > 0 && (
-            <div className="space-y-3 pt-4 border-t">
+            <div className="space-y-3 pt-4 border-t flex-1 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Uploaded Images</h3>
                 <Badge variant="secondary">{images.length}</Badge>
               </div>
-              <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3 flex-1 overflow-y-auto">
                 {images.map((img, index) => (
                   <Card key={img.id} className={`${img.hasError ? 'border-red-300' : 'border-green-300'} border-2`}>
                     <CardContent className="p-2">
@@ -915,12 +930,6 @@ export default function FaceDetector() {
                     className="max-w-full h-auto rounded-lg shadow-lg"
                   />
                 </div>
-                <Button
-                  onClick={downloadGif}
-                  className="w-full bg-green-600 hover:bg-green-700"
-                >
-                  📥 Download GIF
-                </Button>
               </div>
             ) : (
               // Video Preview
@@ -943,12 +952,6 @@ export default function FaceDetector() {
                     className="max-w-full h-auto rounded-lg shadow-lg"
                   />
                 </div>
-                <Button
-                  onClick={downloadVideo}
-                  className="w-full bg-blue-600 hover:bg-blue-700"
-                >
-                  📥 Download Video
-                </Button>
               </div>
             )}
           </CardContent>
@@ -973,7 +976,6 @@ export default function FaceDetector() {
                   disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
                   className="h-auto py-4 flex flex-col gap-2"
                 >
-                  <span className="text-2xl">📸</span>
                   <span className="font-semibold">GIF</span>
                   <span className="text-xs text-muted-foreground">
                     Universal compatibility
@@ -985,7 +987,6 @@ export default function FaceDetector() {
                   disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
                   className="h-auto py-4 flex flex-col gap-2"
                 >
-                  <span className="text-2xl">🎥</span>
                   <span className="font-semibold">Video</span>
                   <span className="text-xs text-muted-foreground">
                     High quality MP4/WebM
@@ -1038,6 +1039,50 @@ export default function FaceDetector() {
               </div>
             </div>
 
+            {/* Video FPS Selection - Only show for Video format */}
+            {exportFormat === 'video' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-semibold">Video Frame Rate (FPS)</Label>
+                  <Badge variant="secondary" className="font-mono">
+                    {videoFps} FPS
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Button
+                    size="sm"
+                    variant={videoFps === 24 ? 'default' : 'outline'}
+                    onClick={() => setVideoFps(24)}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    24 FPS
+                    <span className="block text-xs text-muted-foreground">Cinematic</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={videoFps === 30 ? 'default' : 'outline'}
+                    onClick={() => setVideoFps(30)}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    30 FPS
+                    <span className="block text-xs text-muted-foreground">Standard</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={videoFps === 60 ? 'default' : 'outline'}
+                    onClick={() => setVideoFps(60)}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    60 FPS
+                    <span className="block text-xs text-muted-foreground">Smooth</span>
+                  </Button>
+                </div>
+                <p className="text-xs text-center text-muted-foreground">
+                  Higher FPS = smoother video playback (larger file size)
+                </p>
+              </div>
+            )}
+
             {/* Current Settings Summary */}
             <div className="p-4 bg-muted rounded-lg space-y-2">
               <h4 className="text-sm font-semibold">Current Settings</h4>
@@ -1054,10 +1099,17 @@ export default function FaceDetector() {
                   <span className="text-muted-foreground">Face Zoom:</span>
                   <span className="font-medium">{zoomLevel}px</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">FPS:</span>
-                  <span className="font-medium">{(1000 / frameDuration).toFixed(1)}</span>
-                </div>
+                {exportFormat === 'video' ? (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Video FPS:</span>
+                    <span className="font-medium">{videoFps}</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Animation FPS:</span>
+                    <span className="font-medium">{(1000 / frameDuration).toFixed(1)}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1069,12 +1121,12 @@ export default function FaceDetector() {
               variant="default"
             >
               {isGeneratingGif ? (
-                <>🎨 Generating GIF... {gifProgress}%</>
+                <>Generating GIF... {gifProgress}%</>
               ) : isGeneratingVideo ? (
-                <>🎬 Recording Video... {videoProgress}%</>
+                <>Recording Video... {videoProgress}%</>
               ) : (
                 <>
-                  {exportFormat === 'gif' ? '📸 Generate GIF' : '🎥 Generate Video'} ({validImagesCount} frames)
+                  {exportFormat === 'gif' ? 'Download GIF' : 'Download Video'} ({validImagesCount} frames)
                 </>
               )}
             </Button>
@@ -1095,7 +1147,7 @@ export default function FaceDetector() {
       {images.length > 0 && zoomLevel !== processedWithZoom && (
         <Alert className="w-full max-w-2xl" variant="destructive">
           <AlertTitle className="flex items-center gap-2">
-            ⚠️ Zoom level changed!
+            Zoom level changed!
           </AlertTitle>
           <AlertDescription>
             Images were processed with {processedWithZoom}px, but zoom is now {zoomLevel}px.
@@ -1113,7 +1165,7 @@ export default function FaceDetector() {
             variant={zoomLevel !== processedWithZoom ? "destructive" : "secondary"}
             className={zoomLevel !== processedWithZoom ? "animate-pulse" : ""}
           >
-            🔄 {zoomLevel !== processedWithZoom ? 'Reprocess with New Zoom!' : 'Reprocess Images'}
+            {zoomLevel !== processedWithZoom ? 'Reprocess with New Zoom' : 'Reprocess Images'}
           </Button>
           <Button
             onClick={clearAll}
