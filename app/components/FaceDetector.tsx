@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadFaceApiModels, detectSingleFace, areModelsLoaded } from '@/lib/faceapi';
 import { alignFaceOnCanvas, calculateEyeMetrics, drawEyeMetrics } from '@/lib/faceAlignment';
+import { loadOpenCV, isOpenCVReady } from '@/lib/opencv';
 import GIF from 'gif.js';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,8 @@ export default function FaceDetector() {
   const [isModelsLoading, setIsModelsLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [useTinyModel, setUseTinyModel] = useState(false);
+  const [isProductMode, setIsProductMode] = useState(false); // Toggle between face detection and template matching
+  const [isOpenCVLoading, setIsOpenCVLoading] = useState(false);
   const [isGeneratingGif, setIsGeneratingGif] = useState(false);
   const [gifProgress, setGifProgress] = useState(0);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
@@ -52,6 +55,12 @@ export default function FaceDetector() {
   const [exportResolution, setExportResolution] = useState(500); // Default 500x500
   const [videoFps, setVideoFps] = useState(30); // Default 30 FPS for video
   const [videoFileExtension, setVideoFileExtension] = useState('webm'); // Track actual video format
+  const [audioFile, setAudioFile] = useState<File | null>(null); // Audio file for video
+  const [audioSource, setAudioSource] = useState<'none' | 'upload' | 'click' | 'beep' | 'whoosh'>('none'); // Audio source type
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null); // Audio element for preview
+  const audioContextRef = useRef<AudioContext | null>(null); // Audio context for preview
+  const audioSourceNodeRef = useRef<AudioBufferSourceNode | null>(null); // Audio source node for preview
 
   // Load face-api models on component mount
   useEffect(() => {
@@ -71,7 +80,26 @@ export default function FaceDetector() {
     loadModels();
   }, []);
 
-  // Cleanup preview URLs on unmount
+  // Load OpenCV when Product Mode is enabled
+  useEffect(() => {
+    if (isProductMode && !isOpenCVReady()) {
+      const initOpenCV = async () => {
+        setIsOpenCVLoading(true);
+        try {
+          await loadOpenCV();
+          setIsOpenCVLoading(false);
+          console.log('✅ OpenCV.js ready for template matching');
+        } catch (err) {
+          setError('Failed to load OpenCV.js');
+          setIsOpenCVLoading(false);
+          console.error(err);
+        }
+      };
+      initOpenCV();
+    }
+  }, [isProductMode]);
+
+  // Cleanup preview URLs and audio on unmount
   useEffect(() => {
     return () => {
       if (gifPreviewUrl) {
@@ -82,6 +110,19 @@ export default function FaceDetector() {
       }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
+      }
+      // Stop preview audio
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+      if (audioSourceNodeRef.current) {
+        audioSourceNodeRef.current.stop();
+        audioSourceNodeRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
       }
     };
   }, [gifPreviewUrl, videoPreviewUrl]);
@@ -139,6 +180,88 @@ export default function FaceDetector() {
     };
   }, [images, frameDuration]);
 
+  // Play preview audio when images or audio source changes
+  useEffect(() => {
+    const validImages = images.filter(img => img.alignedCanvas && !img.hasError);
+
+    // Stop any currently playing audio
+    const stopPreviewAudio = () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.currentTime = 0;
+        previewAudioRef.current = null;
+      }
+      if (audioSourceNodeRef.current) {
+        try {
+          audioSourceNodeRef.current.stop();
+        } catch (e) {
+          // Already stopped
+        }
+        audioSourceNodeRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+    };
+
+    // Always stop previous audio first
+    stopPreviewAudio();
+
+    // Only play audio if we have images and audio is enabled
+    if (validImages.length === 0 || audioSource === 'none') {
+      return;
+    }
+
+    const playPreviewAudio = async () => {
+      try {
+        if (audioSource === 'upload' && audioFile) {
+          // Use uploaded audio file for preview
+          console.log('🎵 Playing uploaded audio in preview...');
+          const audio = new Audio(URL.createObjectURL(audioFile));
+          audio.loop = true;
+          audio.volume = 0.5;
+          await audio.play();
+          previewAudioRef.current = audio;
+          console.log('✅ Preview audio playing (uploaded file)');
+        } else if (audioSource === 'click' || audioSource === 'beep' || audioSource === 'whoosh') {
+          // Generate and play pre-built audio for preview
+          console.log(`🎵 Generating ${audioSource} audio for preview...`);
+          const previewDuration = (validImages.length * frameDuration) / 1000; // Total animation duration in seconds
+          const audioBuffer = await generatePreviewAudioBuffer(audioSource, previewDuration);
+
+          // Create audio context and play the buffer in a loop
+          const audioCtx = new AudioContext();
+          audioContextRef.current = audioCtx;
+
+          const playLoop = () => {
+            if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+              return;
+            }
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+            source.loop = true;
+            source.start(0);
+            audioSourceNodeRef.current = source;
+          };
+
+          playLoop();
+          console.log(`✅ Preview audio playing (${audioSource})`);
+        }
+      } catch (error) {
+        console.error('❌ Error playing preview audio:', error);
+      }
+    };
+
+    playPreviewAudio();
+
+    return () => {
+      stopPreviewAudio();
+    };
+  }, [images, audioSource, audioFile, frameDuration]);
+
   // Handle multiple file uploads
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -165,35 +288,79 @@ export default function FaceDetector() {
         // Load image
         const img = await loadImage(url);
 
-        // Detect face and align
-        const detection = await detectSingleFace(img, {
-          withLandmarks: true,
-          useTinyModel,
-        });
+        if (isProductMode) {
+          // Product Mode: Load images with zoom control
+          console.log('📦 Product Mode: Image loaded, zoom level:', zoomLevel);
 
-        if (detection && detection.landmarks) {
-          const metrics = calculateEyeMetrics(detection.landmarks);
-          const alignedCanvas = alignFaceOnCanvas(img, detection.landmarks, {
-            canvasSize: 500,
-            targetEyeDistance: zoomLevel, // Use user-selected zoom level
-          });
+          // Create a canvas with the image (respecting zoom level)
+          const canvas = document.createElement('canvas');
+          canvas.width = 500;
+          canvas.height = 500;
+          const ctx = canvas.getContext('2d');
+
+          if (ctx) {
+            // Use zoom level to control how much of the image is shown
+            // zoomLevel ranges from 80 (show more) to 240 (show less)
+            // Convert to a scale factor: higher zoom = larger crop (closer view)
+            const zoomFactor = zoomLevel / 140; // Normalize around default (140)
+
+            // Calculate the size of the crop from the original image
+            const cropSize = Math.min(img.width, img.height) / zoomFactor;
+
+            // Center the crop
+            const cropX = (img.width - cropSize) / 2;
+            const cropY = (img.height - cropSize) / 2;
+
+            // Fill background
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, 500, 500);
+
+            // Draw the cropped and scaled image
+            ctx.drawImage(
+              img,
+              cropX, cropY, cropSize, cropSize, // source crop
+              0, 0, 500, 500 // destination (full canvas)
+            );
+          }
 
           newImages.push({
             id,
             originalUrl: url,
-            alignedCanvas,
-            angle: (metrics.angle * 180) / Math.PI,
+            alignedCanvas: canvas,
+            angle: 0,
             hasError: false,
           });
         } else {
-          newImages.push({
-            id,
-            originalUrl: url,
-            alignedCanvas: null,
-            angle: 0,
-            hasError: true,
-            errorMessage: 'No face detected',
+          // Face Detection Mode: Normal workflow
+          const detection = await detectSingleFace(img, {
+            withLandmarks: true,
+            useTinyModel,
           });
+
+          if (detection && detection.landmarks) {
+            const metrics = calculateEyeMetrics(detection.landmarks);
+            const alignedCanvas = alignFaceOnCanvas(img, detection.landmarks, {
+              canvasSize: 500,
+              targetEyeDistance: zoomLevel, // Use user-selected zoom level
+            });
+
+            newImages.push({
+              id,
+              originalUrl: url,
+              alignedCanvas,
+              angle: (metrics.angle * 180) / Math.PI,
+              hasError: false,
+            });
+          } else {
+            newImages.push({
+              id,
+              originalUrl: url,
+              alignedCanvas: null,
+              angle: 0,
+              hasError: true,
+              errorMessage: 'No face detected',
+            });
+          }
         }
       } catch (err) {
         console.error('Error processing image:', err);
@@ -264,33 +431,65 @@ export default function FaceDetector() {
             // Reload the image
             const loadedImg = await loadImage(img.originalUrl);
 
-            // Detect face again
-            const detection = await detectSingleFace(loadedImg, {
-              withLandmarks: true,
-              useTinyModel,
-            });
+            if (isProductMode) {
+              // Product Mode: Reprocess with new zoom
+              const canvas = document.createElement('canvas');
+              canvas.width = 500;
+              canvas.height = 500;
+              const ctx = canvas.getContext('2d');
 
-            if (detection && detection.landmarks) {
-              const metrics = calculateEyeMetrics(detection.landmarks);
-              const alignedCanvas = alignFaceOnCanvas(loadedImg, detection.landmarks, {
-                canvasSize: 500,
-                targetEyeDistance: useZoom,
-              });
+              if (ctx) {
+                const zoomFactor = useZoom / 140;
+                const cropSize = Math.min(loadedImg.width, loadedImg.height) / zoomFactor;
+                const cropX = (loadedImg.width - cropSize) / 2;
+                const cropY = (loadedImg.height - cropSize) / 2;
 
-              console.log(`✅ Image ${index + 1} reprocessed successfully`);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, 500, 500);
+                ctx.drawImage(
+                  loadedImg,
+                  cropX, cropY, cropSize, cropSize,
+                  0, 0, 500, 500
+                );
+              }
 
-              // Create a completely new object to force React re-render
+              console.log(`✅ Image ${index + 1} reprocessed successfully (Product Mode)`);
+
               return {
-                id: img.id + '-reprocessed-' + Date.now(), // New ID to force re-render
+                id: img.id + '-reprocessed-' + Date.now(),
                 originalUrl: img.originalUrl,
-                alignedCanvas,
-                angle: (metrics.angle * 180) / Math.PI,
+                alignedCanvas: canvas,
+                angle: 0,
                 hasError: false,
               };
-            }
+            } else {
+              // Face Detection Mode: Normal workflow
+              const detection = await detectSingleFace(loadedImg, {
+                withLandmarks: true,
+                useTinyModel,
+              });
 
-            console.log(`⚠️ Image ${index + 1} - no face detected on reprocess`);
-            return img;
+              if (detection && detection.landmarks) {
+                const metrics = calculateEyeMetrics(detection.landmarks);
+                const alignedCanvas = alignFaceOnCanvas(loadedImg, detection.landmarks, {
+                  canvasSize: 500,
+                  targetEyeDistance: useZoom,
+                });
+
+                console.log(`✅ Image ${index + 1} reprocessed successfully`);
+
+                return {
+                  id: img.id + '-reprocessed-' + Date.now(),
+                  originalUrl: img.originalUrl,
+                  alignedCanvas,
+                  angle: (metrics.angle * 180) / Math.PI,
+                  hasError: false,
+                };
+              }
+
+              console.log(`⚠️ Image ${index + 1} - no face detected on reprocess`);
+              return img;
+            }
           } catch (err) {
             console.error(`❌ Error reprocessing image ${index + 1}:`, err);
             return img;
@@ -387,6 +586,165 @@ export default function FaceDetector() {
     }
   };
 
+  // Generate audio buffer for preview (returns AudioBuffer instead of MediaStream)
+  const generatePreviewAudioBuffer = async (type: 'click' | 'beep' | 'whoosh', duration: number): Promise<AudioBuffer> => {
+    const audioCtx = new AudioContext();
+    const sampleRate = audioCtx.sampleRate;
+    const totalSamples = Math.floor(sampleRate * duration);
+
+    // Create offline context for rendering
+    const offlineCtx = new OfflineAudioContext(1, totalSamples, sampleRate);
+
+    if (type === 'click') {
+      // Generate click sound on each frame transition
+      const frameInterval = frameDuration / 1000; // Convert to seconds
+      const numClicks = Math.floor(duration / frameInterval);
+
+      for (let i = 0; i < numClicks; i++) {
+        const clickTime = i * frameInterval;
+        const clickOsc = offlineCtx.createOscillator();
+        const clickGain = offlineCtx.createGain();
+
+        clickOsc.frequency.value = 800; // Click frequency
+        clickGain.gain.setValueAtTime(0.3, clickTime);
+        clickGain.gain.exponentialRampToValueAtTime(0.01, clickTime + 0.05);
+
+        clickOsc.connect(clickGain);
+        clickGain.connect(offlineCtx.destination);
+        clickOsc.start(clickTime);
+        clickOsc.stop(clickTime + 0.05);
+      }
+    } else if (type === 'beep') {
+      // Generate beep sound on each frame
+      const frameInterval = frameDuration / 1000;
+      const numBeeps = Math.floor(duration / frameInterval);
+
+      for (let i = 0; i < numBeeps; i++) {
+        const beepTime = i * frameInterval;
+        const beepOsc = offlineCtx.createOscillator();
+        const beepGain = offlineCtx.createGain();
+
+        beepOsc.frequency.value = 440; // A4 note
+        beepGain.gain.setValueAtTime(0.2, beepTime);
+        beepGain.gain.exponentialRampToValueAtTime(0.01, beepTime + 0.1);
+
+        beepOsc.connect(beepGain);
+        beepGain.connect(offlineCtx.destination);
+        beepOsc.start(beepTime);
+        beepOsc.stop(beepTime + 0.1);
+      }
+    } else if (type === 'whoosh') {
+      // Generate whoosh sound (sweep) on each transition
+      const frameInterval = frameDuration / 1000;
+      const numWhooshes = Math.floor(duration / frameInterval);
+
+      for (let i = 0; i < numWhooshes; i++) {
+        const whooshTime = i * frameInterval;
+        const whooshOsc = offlineCtx.createOscillator();
+        const whooshGain = offlineCtx.createGain();
+
+        whooshOsc.frequency.setValueAtTime(1000, whooshTime);
+        whooshOsc.frequency.exponentialRampToValueAtTime(200, whooshTime + 0.15);
+        whooshGain.gain.setValueAtTime(0.15, whooshTime);
+        whooshGain.gain.exponentialRampToValueAtTime(0.01, whooshTime + 0.15);
+
+        whooshOsc.connect(whooshGain);
+        whooshGain.connect(offlineCtx.destination);
+        whooshOsc.start(whooshTime);
+        whooshOsc.stop(whooshTime + 0.15);
+      }
+    }
+
+    // Render the audio
+    const renderedBuffer = await offlineCtx.startRendering();
+    await audioCtx.close();
+
+    return renderedBuffer;
+  };
+
+  // Generate pre-built audio using Web Audio API (for video export)
+  const generatePreBuiltAudio = async (type: 'click' | 'beep' | 'whoosh', duration: number): Promise<MediaStream> => {
+    const audioCtx = new AudioContext();
+    const sampleRate = audioCtx.sampleRate;
+    const totalSamples = Math.floor(sampleRate * duration);
+
+    // Create offline context for rendering
+    const offlineCtx = new OfflineAudioContext(1, totalSamples, sampleRate);
+
+    if (type === 'click') {
+      // Generate click sound on each frame transition
+      const frameInterval = frameDuration / 1000; // Convert to seconds
+      const numClicks = Math.floor(duration / frameInterval);
+
+      for (let i = 0; i < numClicks; i++) {
+        const clickTime = i * frameInterval;
+        const clickOsc = offlineCtx.createOscillator();
+        const clickGain = offlineCtx.createGain();
+
+        clickOsc.frequency.value = 800; // Click frequency
+        clickGain.gain.setValueAtTime(0.3, clickTime);
+        clickGain.gain.exponentialRampToValueAtTime(0.01, clickTime + 0.05);
+
+        clickOsc.connect(clickGain);
+        clickGain.connect(offlineCtx.destination);
+        clickOsc.start(clickTime);
+        clickOsc.stop(clickTime + 0.05);
+      }
+    } else if (type === 'beep') {
+      // Generate beep sound on each frame
+      const frameInterval = frameDuration / 1000;
+      const numBeeps = Math.floor(duration / frameInterval);
+
+      for (let i = 0; i < numBeeps; i++) {
+        const beepTime = i * frameInterval;
+        const beepOsc = offlineCtx.createOscillator();
+        const beepGain = offlineCtx.createGain();
+
+        beepOsc.frequency.value = 440; // A4 note
+        beepGain.gain.setValueAtTime(0.2, beepTime);
+        beepGain.gain.exponentialRampToValueAtTime(0.01, beepTime + 0.1);
+
+        beepOsc.connect(beepGain);
+        beepGain.connect(offlineCtx.destination);
+        beepOsc.start(beepTime);
+        beepOsc.stop(beepTime + 0.1);
+      }
+    } else if (type === 'whoosh') {
+      // Generate whoosh sound (sweep) on each transition
+      const frameInterval = frameDuration / 1000;
+      const numWhooshes = Math.floor(duration / frameInterval);
+
+      for (let i = 0; i < numWhooshes; i++) {
+        const whooshTime = i * frameInterval;
+        const whooshOsc = offlineCtx.createOscillator();
+        const whooshGain = offlineCtx.createGain();
+
+        whooshOsc.frequency.setValueAtTime(1000, whooshTime);
+        whooshOsc.frequency.exponentialRampToValueAtTime(200, whooshTime + 0.15);
+        whooshGain.gain.setValueAtTime(0.15, whooshTime);
+        whooshGain.gain.exponentialRampToValueAtTime(0.01, whooshTime + 0.15);
+
+        whooshOsc.connect(whooshGain);
+        whooshGain.connect(offlineCtx.destination);
+        whooshOsc.start(whooshTime);
+        whooshOsc.stop(whooshTime + 0.15);
+      }
+    }
+
+    // Render the audio
+    const renderedBuffer = await offlineCtx.startRendering();
+
+    // Create MediaStreamAudioDestinationNode to get a MediaStream
+    const source = audioCtx.createBufferSource();
+    source.buffer = renderedBuffer;
+
+    const destination = audioCtx.createMediaStreamDestination();
+    source.connect(destination);
+    source.start();
+
+    return destination.stream;
+  };
+
   // Generate Video (MP4/WebM) from aligned canvases
   const generateVideo = async (resolution: number = exportResolution, fps: number = videoFps) => {
     const validImages = images.filter(img => img.alignedCanvas && !img.hasError);
@@ -414,7 +772,57 @@ export default function FaceDetector() {
       }
 
       // Setup MediaRecorder with high quality settings
-      const stream = videoCanvas.captureStream(fps); // User-selected FPS
+      let finalStream = videoCanvas.captureStream(fps); // User-selected FPS
+
+      // Add audio based on user's selection
+      if (audioSource !== 'none') {
+        console.log(`🎵 Adding ${audioSource} audio to video...`);
+        try {
+          if (audioSource === 'upload' && audioFile) {
+            // Use uploaded audio file
+            console.log('🎵 Using uploaded audio file...');
+            const audioElement = document.createElement('audio');
+            audioElement.src = URL.createObjectURL(audioFile);
+            audioElement.muted = false;
+
+            // Create MediaStream from audio element
+            const audioCtx = new AudioContext();
+            const audioSrc = audioCtx.createMediaElementSource(audioElement);
+            const audioDestination = audioCtx.createMediaStreamDestination();
+            audioSrc.connect(audioDestination);
+            audioSrc.connect(audioCtx.destination); // Also connect to speakers for monitoring
+
+            // Combine video and audio streams
+            const combinedStream = new MediaStream([
+              ...finalStream.getVideoTracks(),
+              ...audioDestination.stream.getAudioTracks()
+            ]);
+
+            finalStream = combinedStream;
+
+            // Start playing audio (will be captured by MediaRecorder)
+            audioElement.play();
+            console.log('✅ Uploaded audio track added to video');
+          } else if (audioSource === 'click' || audioSource === 'beep' || audioSource === 'whoosh') {
+            // Generate pre-built audio
+            console.log(`🎵 Generating ${audioSource} audio...`);
+            const videoDuration = (validImages.length * frameDuration) / 1000; // Convert to seconds
+            const audioStream = await generatePreBuiltAudio(audioSource, videoDuration);
+
+            // Combine video and audio streams
+            const combinedStream = new MediaStream([
+              ...finalStream.getVideoTracks(),
+              ...audioStream.getAudioTracks()
+            ]);
+
+            finalStream = combinedStream;
+            console.log(`✅ Pre-built ${audioSource} audio track added to video`);
+          }
+        } catch (audioError) {
+          console.error('❌ Error adding audio:', audioError);
+          setError('Failed to add audio to video. Video will be generated without audio.');
+        }
+      }
 
       // Calculate bitrate based on resolution (higher res = higher bitrate)
       // Base: 500px = 15 Mbps, scale up for larger resolutions
@@ -444,7 +852,7 @@ export default function FaceDetector() {
         console.log('⚠️ Using default WebM format');
       }
 
-      const mediaRecorder = new MediaRecorder(stream, {
+      const mediaRecorder = new MediaRecorder(finalStream, {
         mimeType,
         videoBitsPerSecond: bitrate,
       });
@@ -572,6 +980,20 @@ export default function FaceDetector() {
     }
     setGifPreviewUrl('');
     setGifBlob(null);
+
+    // Stop preview audio when clearing
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (audioSourceNodeRef.current) {
+      try {
+        audioSourceNodeRef.current.stop();
+      } catch (e) {
+        // Already stopped
+      }
+      audioSourceNodeRef.current = null;
+    }
   };
 
   // Clear Video preview
@@ -581,6 +1003,20 @@ export default function FaceDetector() {
     }
     setVideoPreviewUrl('');
     setVideoBlob(null);
+
+    // Stop preview audio when clearing
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (audioSourceNodeRef.current) {
+      try {
+        audioSourceNodeRef.current.stop();
+      } catch (e) {
+        // Already stopped
+      }
+      audioSourceNodeRef.current = null;
+    }
   };
 
   const validImagesCount = images.filter(img => !img.hasError).length;
@@ -603,6 +1039,62 @@ export default function FaceDetector() {
           <CardDescription>Select multiple images with faces to create your animation</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-4 flex-1 overflow-hidden">
+          {/* Mode Selection Buttons */}
+          <div className="w-full max-w-md">
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant={!isProductMode ? 'default' : 'outline'}
+                onClick={() => {
+                  if (!isProductMode) return; // Already in face mode
+
+                  // Clear images when switching modes
+                  if (images.length > 0) {
+                    const confirmSwitch = window.confirm(
+                      'Switching modes will clear all current images. Continue?'
+                    );
+                    if (!confirmSwitch) {
+                      return;
+                    }
+                    clearAll();
+                  }
+                  setIsProductMode(false);
+                }}
+                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                className="h-auto py-4 flex flex-col gap-1"
+              >
+                <span className="font-semibold">Face Mode</span>
+                <span className="text-xs opacity-80 font-normal">
+                  Detect & align faces
+                </span>
+              </Button>
+              <Button
+                variant={isProductMode ? 'default' : 'outline'}
+                onClick={() => {
+                  if (isProductMode) return; // Already in product mode
+
+                  // Clear images when switching modes
+                  if (images.length > 0) {
+                    const confirmSwitch = window.confirm(
+                      'Switching modes will clear all current images. Continue?'
+                    );
+                    if (!confirmSwitch) {
+                      return;
+                    }
+                    clearAll();
+                  }
+                  setIsProductMode(true);
+                }}
+                disabled={isLoading || isGeneratingGif || isGeneratingVideo}
+                className="h-auto py-4 flex flex-col gap-1"
+              >
+                <span className="font-semibold">Product Mode</span>
+                <span className="text-xs opacity-80 font-normal">
+                  Align any objects
+                </span>
+              </Button>
+            </div>
+          </div>
+
           <input
             ref={fileInputRef}
             type="file"
@@ -613,15 +1105,17 @@ export default function FaceDetector() {
           />
           <Button
             onClick={handleUploadClick}
-            disabled={isModelsLoading || isLoading}
+            disabled={isModelsLoading || isLoading || (isProductMode && isOpenCVLoading)}
             size="lg"
             className="w-full max-w-xs"
           >
-            {isModelsLoading ? 'Loading models...' : isLoading ? 'Processing...' : 'Upload Images'}
+            {isModelsLoading ? 'Loading models...' :
+             isOpenCVLoading ? 'Loading OpenCV...' :
+             isLoading ? 'Processing...' : 'Upload Images'}
           </Button>
 
-          {/* Detector Model Selection */}
-          {!isModelsLoading && (
+          {/* Detector Model Selection - Only show in Face Detection mode */}
+          {!isModelsLoading && !isProductMode && (
             <div className="flex items-center gap-3">
               <input
                 type="checkbox"
@@ -638,7 +1132,7 @@ export default function FaceDetector() {
 
           {/* Zoom Level Control */}
           <div className="flex items-center justify-between w-full">
-            <Label className="font-semibold">Face Zoom Level</Label>
+            <Label className="font-semibold">Zoom Level</Label>
             <Badge variant="secondary" className="font-mono">{zoomLevel}px</Badge>
           </div>
 
@@ -711,7 +1205,9 @@ export default function FaceDetector() {
             </div>
 
             <p className="text-xs text-muted-foreground text-center">
-              Lower values = more breathing space around face
+              {isProductMode
+                ? 'Lower values = show more of the image'
+                : 'Lower values = more breathing space around face'}
             </p>
           </div>
 
@@ -1080,6 +1576,146 @@ export default function FaceDetector() {
                 <p className="text-xs text-center text-muted-foreground">
                   Higher FPS = smoother video playback (larger file size)
                 </p>
+              </div>
+            )}
+
+            {/* Audio Options - Only show for Video format */}
+            {exportFormat === 'video' && (
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Audio (Optional)</Label>
+
+                {/* Audio Source Selection */}
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    variant={audioSource === 'none' ? 'default' : 'outline'}
+                    onClick={() => {
+                      setAudioSource('none');
+                      setAudioFile(null);
+                      if (audioInputRef.current) {
+                        audioInputRef.current.value = '';
+                      }
+                    }}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    No Audio
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={audioSource === 'upload' ? 'default' : 'outline'}
+                    onClick={() => setAudioSource('upload')}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    Upload File
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={audioSource === 'click' ? 'default' : 'outline'}
+                    onClick={() => {
+                      setAudioSource('click');
+                      setAudioFile(null);
+                      if (audioInputRef.current) {
+                        audioInputRef.current.value = '';
+                      }
+                    }}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    Click Sound
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={audioSource === 'beep' ? 'default' : 'outline'}
+                    onClick={() => {
+                      setAudioSource('beep');
+                      setAudioFile(null);
+                      if (audioInputRef.current) {
+                        audioInputRef.current.value = '';
+                      }
+                    }}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                  >
+                    Beep Sound
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={audioSource === 'whoosh' ? 'default' : 'outline'}
+                    onClick={() => {
+                      setAudioSource('whoosh');
+                      setAudioFile(null);
+                      if (audioInputRef.current) {
+                        audioInputRef.current.value = '';
+                      }
+                    }}
+                    disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                    className="col-span-2"
+                  >
+                    Whoosh Sound
+                  </Button>
+                </div>
+
+                {/* Audio File Upload - Only show when 'upload' is selected */}
+                {audioSource === 'upload' && (
+                  <>
+                    <input
+                      ref={audioInputRef}
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setAudioFile(file);
+                          console.log(`🎵 Audio file selected: ${file.name}`);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                    <div className="space-y-2">
+                      <Button
+                        onClick={() => audioInputRef.current?.click()}
+                        disabled={images.length === 0 || isGeneratingGif || isGeneratingVideo}
+                        variant="outline"
+                        className="w-full"
+                      >
+                        {audioFile ? `Selected: ${audioFile.name}` : 'Choose Audio File'}
+                      </Button>
+                      {audioFile && (
+                        <Button
+                          onClick={() => {
+                            setAudioFile(null);
+                            if (audioInputRef.current) {
+                              audioInputRef.current.value = '';
+                            }
+                          }}
+                          variant="ghost"
+                          size="sm"
+                          className="w-full text-red-600"
+                        >
+                          Remove Audio
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-center text-muted-foreground">
+                      Upload MP3, WAV, or other audio file to add to your video
+                    </p>
+                  </>
+                )}
+
+                {/* Description for pre-built audio */}
+                {audioSource === 'click' && (
+                  <p className="text-xs text-center text-muted-foreground">
+                    Short click sound will play at each frame transition
+                  </p>
+                )}
+                {audioSource === 'beep' && (
+                  <p className="text-xs text-center text-muted-foreground">
+                    Musical beep (A4 note) will play at each frame transition
+                  </p>
+                )}
+                {audioSource === 'whoosh' && (
+                  <p className="text-xs text-center text-muted-foreground">
+                    Whoosh sweep sound will play at each frame transition
+                  </p>
+                )}
               </div>
             )}
 
