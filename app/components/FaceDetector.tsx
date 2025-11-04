@@ -52,7 +52,8 @@ export default function FaceDetector() {
 
   // Export settings
   const [exportFormat, setExportFormat] = useState<'gif' | 'video'>('gif');
-  const [exportResolution, setExportResolution] = useState(500); // Default 500x500
+  const [exportResolution, setExportResolution] = useState(500); // Default base resolution
+  const [aspectRatio, setAspectRatio] = useState<'1:1' | '9:16' | '16:9' | '4:5'>('1:1'); // Aspect ratio
   const [videoFps, setVideoFps] = useState(30); // Default 30 FPS for video
   const [videoFileExtension, setVideoFileExtension] = useState('webm'); // Track actual video format
   const [audioFile, setAudioFile] = useState<File | null>(null); // Audio file for video
@@ -61,6 +62,22 @@ export default function FaceDetector() {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null); // Audio element for preview
   const audioContextRef = useRef<AudioContext | null>(null); // Audio context for preview
   const audioSourceNodeRef = useRef<AudioBufferSourceNode | null>(null); // Audio source node for preview
+
+  // Helper function to get canvas dimensions based on aspect ratio
+  const getCanvasDimensions = (ratio: string, baseSize: number = 500) => {
+    switch (ratio) {
+      case '1:1': // Square (Instagram Post, Default)
+        return { width: baseSize, height: baseSize };
+      case '9:16': // Portrait (Instagram Stories/Reels)
+        return { width: Math.round(baseSize * 9 / 16), height: baseSize };
+      case '16:9': // Landscape (YouTube)
+        return { width: baseSize, height: Math.round(baseSize * 9 / 16) };
+      case '4:5': // Portrait (Instagram Feed)
+        return { width: Math.round(baseSize * 4 / 5), height: baseSize };
+      default:
+        return { width: baseSize, height: baseSize };
+    }
+  };
 
   // Load face-api models on component mount
   useEffect(() => {
@@ -292,16 +309,17 @@ export default function FaceDetector() {
           // Product Mode: Load images with zoom control
           console.log('📦 Product Mode: Image loaded, zoom level:', zoomLevel);
 
-          // Create a canvas with the image (respecting zoom level)
+          // Get canvas dimensions based on aspect ratio
+          const dims = getCanvasDimensions(aspectRatio);
+
+          // Create a canvas with the image (respecting zoom level and aspect ratio)
           const canvas = document.createElement('canvas');
-          canvas.width = 500;
-          canvas.height = 500;
+          canvas.width = dims.width;
+          canvas.height = dims.height;
           const ctx = canvas.getContext('2d');
 
           if (ctx) {
             // Use zoom level to control how much of the image is shown
-            // zoomLevel ranges from 80 (show more) to 240 (show less)
-            // Convert to a scale factor: higher zoom = larger crop (closer view)
             const zoomFactor = zoomLevel / 140; // Normalize around default (140)
 
             // Calculate the size of the crop from the original image
@@ -313,13 +331,13 @@ export default function FaceDetector() {
 
             // Fill background
             ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, 500, 500);
+            ctx.fillRect(0, 0, dims.width, dims.height);
 
             // Draw the cropped and scaled image
             ctx.drawImage(
               img,
               cropX, cropY, cropSize, cropSize, // source crop
-              0, 0, 500, 500 // destination (full canvas)
+              0, 0, dims.width, dims.height // destination (full canvas with aspect ratio)
             );
           }
 
@@ -339,15 +357,45 @@ export default function FaceDetector() {
 
           if (detection && detection.landmarks) {
             const metrics = calculateEyeMetrics(detection.landmarks);
-            const alignedCanvas = alignFaceOnCanvas(img, detection.landmarks, {
+            const dims = getCanvasDimensions(aspectRatio);
+
+            // First, create aligned square canvas
+            const squareCanvas = alignFaceOnCanvas(img, detection.landmarks, {
               canvasSize: 500,
-              targetEyeDistance: zoomLevel, // Use user-selected zoom level
+              targetEyeDistance: zoomLevel,
             });
+
+            // Then, create final canvas with correct aspect ratio
+            const finalCanvas = document.createElement('canvas');
+            finalCanvas.width = dims.width;
+            finalCanvas.height = dims.height;
+            const finalCtx = finalCanvas.getContext('2d');
+
+            if (finalCtx) {
+              // Fill background
+              finalCtx.fillStyle = '#ffffff';
+              finalCtx.fillRect(0, 0, dims.width, dims.height);
+
+              // Calculate position to center the face
+              const offsetX = (dims.width - dims.height) / 2; // For landscape
+              const offsetY = (dims.height - dims.width) / 2; // For portrait
+
+              if (dims.width > dims.height) {
+                // Landscape: center vertically
+                finalCtx.drawImage(squareCanvas, offsetX, 0, dims.height, dims.height);
+              } else if (dims.height > dims.width) {
+                // Portrait: center horizontally
+                finalCtx.drawImage(squareCanvas, 0, offsetY, dims.width, dims.width);
+              } else {
+                // Square: draw as is
+                finalCtx.drawImage(squareCanvas, 0, 0, dims.width, dims.height);
+              }
+            }
 
             newImages.push({
               id,
               originalUrl: url,
-              alignedCanvas,
+              alignedCanvas: finalCanvas,
               angle: (metrics.angle * 180) / Math.PI,
               hasError: false,
             });
@@ -432,10 +480,11 @@ export default function FaceDetector() {
             const loadedImg = await loadImage(img.originalUrl);
 
             if (isProductMode) {
-              // Product Mode: Reprocess with new zoom
+              // Product Mode: Reprocess with new zoom and aspect ratio
+              const dims = getCanvasDimensions(aspectRatio);
               const canvas = document.createElement('canvas');
-              canvas.width = 500;
-              canvas.height = 500;
+              canvas.width = dims.width;
+              canvas.height = dims.height;
               const ctx = canvas.getContext('2d');
 
               if (ctx) {
@@ -445,11 +494,11 @@ export default function FaceDetector() {
                 const cropY = (loadedImg.height - cropSize) / 2;
 
                 ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, 500, 500);
+                ctx.fillRect(0, 0, dims.width, dims.height);
                 ctx.drawImage(
                   loadedImg,
                   cropX, cropY, cropSize, cropSize,
-                  0, 0, 500, 500
+                  0, 0, dims.width, dims.height
                 );
               }
 
@@ -463,7 +512,7 @@ export default function FaceDetector() {
                 hasError: false,
               };
             } else {
-              // Face Detection Mode: Normal workflow
+              // Face Detection Mode: Normal workflow with aspect ratio
               const detection = await detectSingleFace(loadedImg, {
                 withLandmarks: true,
                 useTinyModel,
@@ -471,17 +520,42 @@ export default function FaceDetector() {
 
               if (detection && detection.landmarks) {
                 const metrics = calculateEyeMetrics(detection.landmarks);
-                const alignedCanvas = alignFaceOnCanvas(loadedImg, detection.landmarks, {
+                const dims = getCanvasDimensions(aspectRatio);
+
+                // Create aligned square canvas first
+                const squareCanvas = alignFaceOnCanvas(loadedImg, detection.landmarks, {
                   canvasSize: 500,
                   targetEyeDistance: useZoom,
                 });
+
+                // Create final canvas with aspect ratio
+                const finalCanvas = document.createElement('canvas');
+                finalCanvas.width = dims.width;
+                finalCanvas.height = dims.height;
+                const finalCtx = finalCanvas.getContext('2d');
+
+                if (finalCtx) {
+                  finalCtx.fillStyle = '#ffffff';
+                  finalCtx.fillRect(0, 0, dims.width, dims.height);
+
+                  const offsetX = (dims.width - dims.height) / 2;
+                  const offsetY = (dims.height - dims.width) / 2;
+
+                  if (dims.width > dims.height) {
+                    finalCtx.drawImage(squareCanvas, offsetX, 0, dims.height, dims.height);
+                  } else if (dims.height > dims.width) {
+                    finalCtx.drawImage(squareCanvas, 0, offsetY, dims.width, dims.width);
+                  } else {
+                    finalCtx.drawImage(squareCanvas, 0, 0, dims.width, dims.height);
+                  }
+                }
 
                 console.log(`✅ Image ${index + 1} reprocessed successfully`);
 
                 return {
                   id: img.id + '-reprocessed-' + Date.now(),
                   originalUrl: img.originalUrl,
-                  alignedCanvas,
+                  alignedCanvas: finalCanvas,
                   angle: (metrics.angle * 180) / Math.PI,
                   hasError: false,
                 };
@@ -522,29 +596,33 @@ export default function FaceDetector() {
     setError('');
 
     try {
-      // Create a temporary canvas for resizing if needed
-      const needsResize = resolution !== 500;
+      // Get dimensions based on aspect ratio
+      const dims = getCanvasDimensions(aspectRatio, resolution);
 
-      // Create GIF instance
+      // Create a temporary canvas for resizing if needed
+      const firstCanvas = validImages[0].alignedCanvas;
+      const needsResize = firstCanvas && (firstCanvas.width !== dims.width || firstCanvas.height !== dims.height);
+
+      // Create GIF instance with aspect ratio dimensions
       const gif = new GIF({
         workers: 2,
         quality: 10,
-        width: resolution,
-        height: resolution,
-        workerScript: '/gif.worker.js', // We'll need to copy this
+        width: dims.width,
+        height: dims.height,
+        workerScript: '/gif.worker.js',
       });
 
       // Add frames with user-specified duration
       validImages.forEach((img) => {
         if (img.alignedCanvas) {
           if (needsResize) {
-            // Resize canvas to target resolution
+            // Resize canvas to target resolution with aspect ratio
             const resizedCanvas = document.createElement('canvas');
-            resizedCanvas.width = resolution;
-            resizedCanvas.height = resolution;
+            resizedCanvas.width = dims.width;
+            resizedCanvas.height = dims.height;
             const ctx = resizedCanvas.getContext('2d');
             if (ctx) {
-              ctx.drawImage(img.alignedCanvas, 0, 0, resolution, resolution);
+              ctx.drawImage(img.alignedCanvas, 0, 0, dims.width, dims.height);
               gif.addFrame(resizedCanvas, { delay: frameDuration });
             }
           } else {
@@ -759,12 +837,13 @@ export default function FaceDetector() {
     setError('');
 
     try {
-      console.log(`🎬 Starting video generation with ${validImages.length} frames at ${resolution}x${resolution} @ ${fps} FPS`);
+      const dims = getCanvasDimensions(aspectRatio, resolution);
+      console.log(`🎬 Starting video generation with ${validImages.length} frames at ${dims.width}x${dims.height} @ ${fps} FPS`);
 
       // Create a temporary canvas for video rendering
       const videoCanvas = document.createElement('canvas');
-      videoCanvas.width = resolution;
-      videoCanvas.height = resolution;
+      videoCanvas.width = dims.width;
+      videoCanvas.height = dims.height;
       const ctx = videoCanvas.getContext('2d');
 
       if (!ctx) {
@@ -903,10 +982,10 @@ export default function FaceDetector() {
 
         const img = validImages[currentFrame];
         if (img.alignedCanvas && ctx) {
-          ctx.clearRect(0, 0, resolution, resolution);
+          ctx.clearRect(0, 0, dims.width, dims.height);
           ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, resolution, resolution);
-          ctx.drawImage(img.alignedCanvas, 0, 0, resolution, resolution);
+          ctx.fillRect(0, 0, dims.width, dims.height);
+          ctx.drawImage(img.alignedCanvas, 0, 0, dims.width, dims.height);
         }
 
         const progress = ((currentFrame + 1) / totalFrames) * 100;
@@ -943,6 +1022,18 @@ export default function FaceDetector() {
     if (images.length > 0) {
       console.log(`🔄 Auto-reprocessing ${images.length} images with new zoom level...`);
       await reprocessWithNewZoom(newZoom);
+    }
+  };
+
+  // Handle aspect ratio change
+  const handleAspectRatioChange = async (newRatio: '1:1' | '9:16' | '16:9' | '4:5') => {
+    console.log(`📐 Aspect ratio changed from ${aspectRatio} to ${newRatio}`);
+    setAspectRatio(newRatio);
+
+    // Automatically reprocess images if any are loaded
+    if (images.length > 0) {
+      console.log(`🔄 Auto-reprocessing ${images.length} images with new aspect ratio...`);
+      await reprocessWithNewZoom(); // This function already respects aspectRatio
     }
   };
 
@@ -1491,12 +1582,62 @@ export default function FaceDetector() {
               </div>
             </div>
 
+            {/* Aspect Ratio Selection */}
+            <div className="space-y-3">
+              <Label className="text-sm font-semibold">Aspect Ratio</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <Button
+                  size="sm"
+                  variant={aspectRatio === '1:1' ? 'default' : 'outline'}
+                  onClick={() => handleAspectRatioChange('1:1')}
+                  disabled={isGeneratingGif || isGeneratingVideo || isLoading}
+                  className="flex flex-col gap-1 h-auto py-2"
+                >
+                  <span className="font-semibold">1:1</span>
+                  <span className="text-xs text-muted-foreground">Square</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant={aspectRatio === '9:16' ? 'default' : 'outline'}
+                  onClick={() => handleAspectRatioChange('9:16')}
+                  disabled={isGeneratingGif || isGeneratingVideo || isLoading}
+                  className="flex flex-col gap-1 h-auto py-2"
+                >
+                  <span className="font-semibold">9:16</span>
+                  <span className="text-xs text-muted-foreground">Stories</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant={aspectRatio === '16:9' ? 'default' : 'outline'}
+                  onClick={() => handleAspectRatioChange('16:9')}
+                  disabled={isGeneratingGif || isGeneratingVideo || isLoading}
+                  className="flex flex-col gap-1 h-auto py-2"
+                >
+                  <span className="font-semibold">16:9</span>
+                  <span className="text-xs text-muted-foreground">YouTube</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant={aspectRatio === '4:5' ? 'default' : 'outline'}
+                  onClick={() => handleAspectRatioChange('4:5')}
+                  disabled={isGeneratingGif || isGeneratingVideo || isLoading}
+                  className="flex flex-col gap-1 h-auto py-2"
+                >
+                  <span className="font-semibold">4:5</span>
+                  <span className="text-xs text-muted-foreground">Feed</span>
+                </Button>
+              </div>
+            </div>
+
             {/* Resolution Selection */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-semibold">Resolution</Label>
                 <Badge variant="secondary" className="font-mono">
-                  {exportResolution}x{exportResolution}
+                  {(() => {
+                    const dims = getCanvasDimensions(aspectRatio, exportResolution);
+                    return `${dims.width}x${dims.height}`;
+                  })()}
                 </Badge>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

@@ -1,13 +1,18 @@
 import React from 'react';
+import Image from 'next/image';
 
 export default function Navbar() {
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center px-4 mx-auto max-w-7xl">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold text-foreground">
-            AI Animator
-          </h1>
+        <div className="flex items-center">
+          <Image
+            src="/match-cut-logo.svg"
+            alt="AI Match Cut"
+            width={48}
+            height={32}
+            className="text-foreground"
+          />
         </div>
 
         <div className="ml-auto flex items-center gap-4">
