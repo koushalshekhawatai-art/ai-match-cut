@@ -616,13 +616,32 @@ export default function FaceDetector() {
       validImages.forEach((img) => {
         if (img.alignedCanvas) {
           if (needsResize) {
-            // Resize canvas to target resolution with aspect ratio
+            // Resize canvas to target resolution while maintaining aspect ratio
             const resizedCanvas = document.createElement('canvas');
             resizedCanvas.width = dims.width;
             resizedCanvas.height = dims.height;
             const ctx = resizedCanvas.getContext('2d');
             if (ctx) {
-              ctx.drawImage(img.alignedCanvas, 0, 0, dims.width, dims.height);
+              // Fill background
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, dims.width, dims.height);
+
+              // Calculate scale to fit canvas while maintaining aspect ratio
+              const sourceWidth = img.alignedCanvas.width;
+              const sourceHeight = img.alignedCanvas.height;
+              const scaleX = dims.width / sourceWidth;
+              const scaleY = dims.height / sourceHeight;
+              const scale = Math.min(scaleX, scaleY);
+
+              // Calculate scaled dimensions
+              const scaledWidth = sourceWidth * scale;
+              const scaledHeight = sourceHeight * scale;
+
+              // Center the image
+              const x = (dims.width - scaledWidth) / 2;
+              const y = (dims.height - scaledHeight) / 2;
+
+              ctx.drawImage(img.alignedCanvas, x, y, scaledWidth, scaledHeight);
               gif.addFrame(resizedCanvas, { delay: frameDuration });
             }
           } else {
@@ -982,10 +1001,32 @@ export default function FaceDetector() {
 
         const img = validImages[currentFrame];
         if (img.alignedCanvas && ctx) {
+          // Clear and fill background
           ctx.clearRect(0, 0, dims.width, dims.height);
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, dims.width, dims.height);
-          ctx.drawImage(img.alignedCanvas, 0, 0, dims.width, dims.height);
+
+          // Calculate scale to fit canvas while maintaining aspect ratio
+          const sourceWidth = img.alignedCanvas.width;
+          const sourceHeight = img.alignedCanvas.height;
+          const targetWidth = dims.width;
+          const targetHeight = dims.height;
+
+          // Calculate scale factor (use the minimum to ensure it fits)
+          const scaleX = targetWidth / sourceWidth;
+          const scaleY = targetHeight / sourceHeight;
+          const scale = Math.min(scaleX, scaleY);
+
+          // Calculate scaled dimensions
+          const scaledWidth = sourceWidth * scale;
+          const scaledHeight = sourceHeight * scale;
+
+          // Calculate position to center the image
+          const x = (targetWidth - scaledWidth) / 2;
+          const y = (targetHeight - scaledHeight) / 2;
+
+          // Draw the image scaled and centered
+          ctx.drawImage(img.alignedCanvas, x, y, scaledWidth, scaledHeight);
         }
 
         const progress = ((currentFrame + 1) / totalFrames) * 100;
